@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>TPN Logistics — Chat Agent</title>
+<style>
+  :root{
+    --accent:#0066cc;
+    --accent-dark:#004a99;
+    --bg:#f4f6f9;
+    --panel:#ffffff;
+    --muted:#6b7280;
+    --success:#10b981;
+  }
+  html,body{height:100%;margin:0;font-family:Inter,Segoe UI,Roboto,Arial,sans-serif;background:var(--bg);color:#111;}
+  .app { min-height:100%; display:flex; flex-direction:column; }
+
+  header{
+    padding:20px;
+    background:linear-gradient(90deg, #184673 0%, #d8dfe7 100%);
+    box-shadow: 0 1px 0 rgba(0,0,0,0.04);
+  }
+  header h1{margin:0;font-size:20px;color:white;}
+
+  /* Bot toggle button */
+  .bot-toggle {
+    position:fixed; right:20px; top:20px; z-index:1200;
+    background:var(--accent); color:white; border:none;
+    border-radius:28px; padding:12px 16px; cursor:pointer;
+    box-shadow:0 6px 20px rgba(3,37,65,0.2); font-weight:600;
+  }
+
+  /* Bot panel drawer */
+  #botPanel {
+    position:fixed; right:0; top:0; height:100%; width:40%;
+    display:flex; flex-direction:column; background:var(--panel);
+    box-shadow:-6px 0 30px rgba(2,6,23,0.12);
+    transform:translateX(100%); transition:transform .32s cubic-bezier(.2,.9,.2,1);
+    z-index:1100;
+  }
+  #botPanel.open{ transform:translateX(0); }
+
+  .bot-header{
+    padding:16px; display:flex; align-items:center; justify-content:space-between;
+    border-bottom:1px solid #eef2f7; background:linear-gradient(90deg,#184673,#d8dfe7); color:white;
+  }
+
+  .chat-body { flex:1; padding:16px; overflow:auto; display:flex; flex-direction:column; gap:12px;
+    background:linear-gradient(180deg,#fbfdff,#f7f9fc); }
+  .message { max-width:84%; padding:8px 10px; border-radius:10px; line-height:1.35; }
+  .message.bot { background:#bacbe9; align-self:flex-start; }
+  .message.user{ background:#b8eabc; align-self:flex-end; }
+
+  .agent-controls{
+    display:flex; gap:8px; padding:12px; border-top:1px solid #eef2f7;
+  }
+  .agent-btn{
+    flex:1; padding:4px 2px; border-radius:8px; border:1px solid#98bce0;
+    background:white; cursor:pointer; font-weight:600;
+  }
+  .agent-btn.active{
+    background:linear-gradient(90deg,var(--accent),var(--accent-dark));
+    color:white; border:none;
+  }
+
+  .chat-input{ display:flex; gap:8px; padding:12px; border-top:1px solid #eef2f7; }
+  .chat-input input{ flex:1; padding:10px 12px; border-radius:8px; border:1px solid #dbe6f0; font-size:14px; }
+  .chat-input button{ padding:10px 14px; border-radius:8px; border:none; background:#004c77; color:white; cursor:pointer; font-weight:700;}
+
+  .tiny{font-size:12px;color:#e3e3e3;}
+  .choice-btn{
+    padding:8px 12px; border-radius:8px; border:1px solid #8aa8d0;
+    background:white; cursor:pointer; width:50%; margin-top:6px; font-weight:600;
+  }
+  .choice-btn:hover{ background:#e7f1ff; }
+</style>
+</head>
+
+<body>
+<div class="app">
+<header>
+  <h1>TPN Logistics Portal</h1>
+  <div class="tiny">Use the right-side TPN Connect Agent for quick lookups and support.</div>
+</header>
+
+<main>
+  <img src="https://bwautomatestorage.blob.core.windows.net/logistic/logisticai.jpg" width="100%" />
+</main>
+
+<button id="toggleBtn" class="bot-toggle">Open Chat</button>
+
+<aside id="botPanel">
+  <div class="bot-header">
+    <div>
+      <div style="font-weight:bold;">TPN BOT  <button id="resetConsBtn" style="padding:2px 6px; border-radius:4px;">Reset</button></div>
+      <div class="tiny">I am multi agent bot, How can I help you?</div>
+    </div>
+    <button id="closeBtn" class="bot-close" style="background:none;border:none;color:white;font-size:18px;">✕</button>
+  </div>
+
+  <div id="chatBody" class="chat-body"></div>
+
+  <div class="agent-controls">
+    <button class="agent-btn" data-agent="cons" id="btnCons">Consignment Info Agent</button>
+    <button class="agent-btn" data-agent="support" id="btnSupport">App Support Agent</button>
+    <button class="agent-btn" data-agent="user" id="btnUser">Manage Users Agent</button>
+  </div>
+
+  <div class="chat-input">
+    <input id="userInput" type="text" placeholder="Type here..." />
+    <button id="sendBtn">Send</button>
+  </div>
+</aside>
+</div>
+
+<script>
+const toggleBtn = document.getElementById('toggleBtn');
+const botPanel = document.getElementById('botPanel');
+const closeBtn = document.getElementById('closeBtn');
+const chatBody = document.getElementById('chatBody');
+const sendBtn = document.getElementById('sendBtn');
+const userInput = document.getElementById('userInput');
+const agentButtons = document.querySelectorAll('.agent-btn');
+const resetConsBtn = document.getElementById('resetConsBtn');
+
+let activeAgent = null;
+let consignmentId = null;
+let awaitingConsignmentId = false;
+let supportSelectedSubject = null;
+let awaitingSupportSummary = false;
+
+/* UI Helpers */
+function appendBot(text) {
+  const el = document.createElement('div'); el.className = 'message bot';
+  el.innerHTML = text; chatBody.appendChild(el); chatBody.scrollTop = chatBody.scrollHeight;
+}
+function appendUser(text) {
+  const el = document.createElement('div'); el.className = 'message user';
+  el.textContent = text; chatBody.appendChild(el); chatBody.scrollTop = chatBody.scrollHeight;
+}
+
+/* Panel Control */
+toggleBtn.onclick = ()=>{ botPanel.classList.add('open'); };
+closeBtn.onclick = ()=>{ botPanel.classList.remove('open'); };
+
+/* Reset Consignment */
+resetConsBtn.onclick = ()=>{
+  consignmentId=null; awaitingConsignmentId=true;
+  window.location.reload()
+  appendBot("Consignment ID reset. Please select Consignment Info Agent again.");
+};
+
+/* Agent Selection */
+agentButtons.forEach(btn=>{
+  btn.onclick = ()=>{
+    agentButtons.forEach(b=>b.classList.remove('active'));
+    btn.classList.add('active');
+    setActiveAgent(btn.dataset.agent);
+  };
+});
+
+/* Activate Agent */
+function setActiveAgent(agent){
+  activeAgent = agent;
+  awaitingSupportSummary = false;
+  supportSelectedSubject = null;
+
+  if(agent==='cons'){
+    if(!consignmentId){
+      awaitingConsignmentId = true;
+      appendBot("Your Consignment Info Agent is active. Please enter a consignment ID.");
+    } else {
+      appendBot(`Consignment Agent active. Current ID: <b>${consignmentId}</b>`);
+    }
+  }
+
+  if(agent==='support'){
+    appendBot("Your Support Agent is active. Select the type of issue:");
+    showSupportOptions();
+  }
+
+  if(agent==='user'){
+    appendBot("Your Update User Agent is active. Enter user update request.");
+  }
+}
+
+/* Support – Step 1 selection */
+function showSupportOptions(){
+  const options = [
+    "Shipment / Logistic Issue",
+    "Payment Issue",
+    "Invoice Related Issue"
+  ];
+  options.forEach(opt=>{
+    let btn = document.createElement('button');
+    btn.className='choice-btn';
+    btn.textContent=opt;
+    btn.onclick = ()=> handleSupportSubject(opt);
+    chatBody.appendChild(btn);
+  });
+  chatBody.scrollTop = chatBody.scrollHeight;
+}
+
+function handleSupportSubject(subject){
+  supportSelectedSubject = subject;
+  awaitingSupportSummary = true;
+  appendBot(`You selected: <b>${subject}</b><br>Please describe the issue (summary).`);
+}
+
+/* Send button */
+sendBtn.onclick = sendCurrent;
+userInput.addEventListener('keydown',e=>{
+  if(e.key==='Enter'){ sendCurrent(); }
+});
+
+function sendCurrent(){
+  const text = userInput.value.trim();
+  if(!text) return;
+  appendUser(text);
+  userInput.value='';
+
+  // Support summary step
+  if(activeAgent==='support'){
+    if(awaitingSupportSummary){
+      awaitingSupportSummary = false;
+      callSupportAPI(supportSelectedSubject, text);
+      return;
+    }
+    appendBot("Please select an issue type first.");
+    return;
+  }
+
+  // Consignment flow
+  if(activeAgent==='cons'){ handleConsignment(text); return; }
+
+  if(activeAgent==='user'){ callGenericAPI("updateuseragent", text); return; }
+}
+
+/* Consignment Flow */
+function handleConsignment(text){
+  if(awaitingConsignmentId){
+    consignmentId = text;
+    awaitingConsignmentId = false;
+    appendBot(`Consignment ID saved: <b>${consignmentId}</b>`);
+    return;
+  }
+  callConsignmentAPI(consignmentId, text);
+}
+
+/* API Calls */
+function callConsignmentAPI(id, query){
+  fetch(`http://localhost:7071/api/consignmentagent?consignmentid=${encodeURIComponent(id)}&query=${encodeURIComponent(query)}`)
+    .then(r=>r.text())
+    .then(t=>appendBot(t))
+    .catch(err=>appendBot("Error: "+err.message));
+}
+
+function callGenericAPI(endpoint, query){
+  fetch(`http://localhost:7071/api/${endpoint}?query=${encodeURIComponent(query)}`)
+    .then(r=>r.text())
+    .then(t=>appendBot(t))
+    .catch(err=>appendBot("Error: "+err.message));
+}
+
+/* Support Agent Final API Call */
+function callSupportAPI(subject, summary){
+  const url = `http://localhost:7071/api/supportagent?subject=${encodeURIComponent(subject)}&summary=${encodeURIComponent(summary)}`;
+  // appendBot("Submitting your support request...");
+  fetch(url)
+    .then(r=>r.text())
+    .then(t=>appendBot(t))
+    .catch(err=>appendBot("Error: "+err.message));
+}
+
+// Initial welcome
+appendBot("<b>Choose Agent First...</b>");
+toggleBtn.click();
+</script>
+</body>
+</html>
